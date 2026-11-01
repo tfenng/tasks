@@ -26,11 +26,15 @@ class Settings(BaseSettings):
     csrf_cookie_name: str = "tc_csrf"
     session_idle_minutes: int = 30
     session_absolute_hours: int = 8
+    session_remember_days: int = 7
 
     script_root: str = "/tmp/task-control-scripts"
     default_shell: str = "/bin/bash"
     known_hosts_path: str = ""
     output_limit_bytes: int = 1024 * 1024
+    output_root: str = "/tmp/task-control-output"
+    output_capture_limit_bytes: int = 64 * 1024 * 1024
+    live_output_max_bytes: int = 256 * 1024
     retention_days: int = 395
     attempt_retention_days: int = 90
     worker_poll_seconds: float = 1.0

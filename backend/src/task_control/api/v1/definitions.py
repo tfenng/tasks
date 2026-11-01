@@ -10,6 +10,7 @@ from task_control.api.deps import AuthContext, require_csrf, require_roles
 from task_control.api.errors import correlation_id
 from task_control.api.schemas import (
     DefinitionCreate,
+    DefinitionDeleteResult,
     DefinitionList,
     DefinitionOut,
     DefinitionUpdate,
@@ -198,3 +199,27 @@ def archive_definition(
     service.archive_definition(db, ctx.user, definition, correlation_id=correlation_id(request))
     db.commit()
     return _serialize(db, definition)
+
+
+@router.delete("/{definition_id}", response_model=DefinitionDeleteResult)
+def delete_definition(
+    definition_id: UUID,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    ctx: Annotated[AuthContext, Depends(require_csrf)],
+    delete_runs: bool = Query(default=False),
+) -> DefinitionDeleteResult:
+    if ctx.user.role not in {Role.ADMIN.value, Role.OPERATOR.value}:
+        from task_control.domain.errors import ForbiddenError
+
+        raise ForbiddenError("insufficient role")
+    definition = service.get_definition(db, definition_id)
+    deleted_runs = service.delete_definition(
+        db,
+        ctx.user,
+        definition,
+        delete_runs=delete_runs,
+        correlation_id=correlation_id(request),
+    )
+    db.commit()
+    return DefinitionDeleteResult(archived=True, deleted_runs=deleted_runs)

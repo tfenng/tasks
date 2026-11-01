@@ -10,6 +10,14 @@ import time
 
 from task_control.config import get_settings
 from task_control.infrastructure.executors.base import ExecutionContext, ExecutionResult
+from task_control.infrastructure.executors.output import (
+    STDERR_NAME,
+    STDOUT_NAME,
+    RedactingCapture,
+    attempt_dir,
+    ensure_attempt_dir,
+    read_tail,
+)
 
 _PLACEHOLDER = re.compile(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 
@@ -22,11 +30,6 @@ def _render(value: str, parameters: dict) -> str:
         return str(parameters[name])
 
     return _PLACEHOLDER.sub(replace, value)
-
-
-def _truncate(data: bytes, limit: int) -> tuple[str, bool]:
-    truncated = len(data) > limit
-    return data[:limit].decode("utf-8", errors="replace"), truncated
 
 
 def _redact(text: str, secrets: tuple[str, ...]) -> str:
@@ -78,7 +81,44 @@ class LocalScriptExecutor:
             env[f"TASK_PARAM_{str(name).upper()}"] = str(value)
         started = time.perf_counter()
         process = None
+        captures: list[RedactingCapture] = []
+        threads: list = []
+
+        def read_outputs() -> tuple[str, str, bool]:
+            directory = attempt_dir(ctx.run_id, ctx.attempt_no)
+            out_text, out_total, out_cut = read_tail(
+                directory / STDOUT_NAME, ctx.output_limit_bytes
+            )
+            err_text, err_total, err_cut = read_tail(
+                directory / STDERR_NAME, ctx.output_limit_bytes
+            )
+            truncated = (
+                out_cut
+                or err_cut
+                or any(capture.truncated for capture in captures)
+                or out_total > ctx.output_limit_bytes
+                or err_total > ctx.output_limit_bytes
+            )
+            return (
+                _redact(out_text, ctx.secret_values),
+                _redact(err_text, ctx.secret_values),
+                truncated,
+            )
+
         try:
+            settings = get_settings()
+            directory = ensure_attempt_dir(ctx.run_id, ctx.attempt_no)
+            stdout_capture = RedactingCapture(
+                directory / STDOUT_NAME,
+                settings.output_capture_limit_bytes,
+                ctx.secret_values,
+            )
+            stderr_capture = RedactingCapture(
+                directory / STDERR_NAME,
+                settings.output_capture_limit_bytes,
+                ctx.secret_values,
+            )
+            captures = [stdout_capture, stderr_capture]
             process = subprocess.Popen(
                 argv,
                 cwd=cwd,
@@ -88,36 +128,56 @@ class LocalScriptExecutor:
                 shell=False,
                 start_new_session=True,
             )
-            stdout, stderr = process.communicate(timeout=ctx.timeout_seconds)
+            threads = [
+                stdout_capture.start(process.stdout),
+                stderr_capture.start(process.stderr),
+            ]
+            timed_out = False
+            try:
+                process.wait(timeout=ctx.timeout_seconds)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    process.wait(timeout=10)
+            for thread in threads:
+                thread.join(timeout=10)
+
             duration_ms = int((time.perf_counter() - started) * 1000)
-            out_text, out_truncated = _truncate(stdout, ctx.output_limit_bytes)
-            err_text, err_truncated = _truncate(stderr, ctx.output_limit_bytes)
-            out_text = _redact(out_text, ctx.secret_values)
-            err_text = _redact(err_text, ctx.secret_values)
-            status = "succeeded" if process.returncode == 0 else "failed"
+            out_text, err_text, truncated = read_outputs()
+            if timed_out:
+                return ExecutionResult(
+                    status="timed_out",
+                    error_class="TIMEOUT",
+                    error_message=f"execution timed out after {ctx.timeout_seconds}s",
+                    stdout=out_text,
+                    stderr=err_text,
+                    duration_ms=duration_ms,
+                    truncated=truncated,
+                )
+            return_code = process.returncode
+            status = "succeeded" if return_code == 0 else "failed"
             return ExecutionResult(
                 status=status,
                 error_class=None if status == "succeeded" else "EXIT_CODE",
                 error_message=None
                 if status == "succeeded"
-                else f"process exited with code {process.returncode}",
-                exit_code=process.returncode,
+                else f"process exited with code {return_code}",
+                exit_code=return_code,
                 stdout=out_text,
                 stderr=err_text,
                 duration_ms=duration_ms,
-                truncated=out_truncated or err_truncated,
-            )
-        except subprocess.TimeoutExpired:
-            if process is not None:
-                with contextlib.suppress(ProcessLookupError):
-                    os.killpg(process.pid, signal.SIGKILL)
-            return ExecutionResult(
-                status="timed_out",
-                error_class="TIMEOUT",
-                error_message="execution timed out",
-                duration_ms=int((time.perf_counter() - started) * 1000),
+                truncated=truncated,
             )
         except Exception as exc:  # noqa: BLE001
+            if process is not None and process.poll() is None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                with contextlib.suppress(Exception):
+                    process.wait(timeout=10)
+            for capture in captures:
+                capture.close()
             return ExecutionResult(
                 status="failed",
                 error_class="UNKNOWN",

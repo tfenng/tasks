@@ -40,6 +40,7 @@ from task_control.infrastructure.security.passwords import hash_password, verify
 from task_control.infrastructure.security.sessions import (
     create_session,
     revoke_session,
+    session_ttl_seconds,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -94,6 +95,7 @@ def login(
         user,
         ip_address=client_meta(request)[0],
         user_agent=client_meta(request)[1],
+        remember=payload.remember,
     )
     record_audit(
         db,
@@ -106,13 +108,14 @@ def login(
         user_agent=client_meta(request)[1],
     )
     db.commit()
+    cookie_max_age = session_ttl_seconds(payload.remember)
     response.set_cookie(
         settings.session_cookie_name,
         tokens.session_token,
         httponly=True,
         secure=settings.cookie_secure,
         samesite="lax",
-        max_age=settings.session_idle_minutes * 60,
+        max_age=cookie_max_age,
         path="/",
     )
     response.set_cookie(
@@ -121,7 +124,7 @@ def login(
         httponly=False,
         secure=settings.cookie_secure,
         samesite="lax",
-        max_age=settings.session_idle_minutes * 60,
+        max_age=cookie_max_age,
         path="/",
     )
     return LoginResponse(user=UserOut.model_validate(user), csrf_token=tokens.csrf_token)

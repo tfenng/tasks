@@ -17,6 +17,13 @@ def _hash(value: str) -> bytes:
     return hashlib.sha256(value.encode("utf-8")).digest()
 
 
+def session_ttl_seconds(remember: bool = False) -> int:
+    settings = get_settings()
+    if remember:
+        return settings.session_remember_days * 24 * 60 * 60
+    return settings.session_idle_minutes * 60
+
+
 @dataclass(frozen=True)
 class SessionTokens:
     session_token: str
@@ -25,9 +32,13 @@ class SessionTokens:
 
 
 def create_session(
-    db: Session, user: User, *, ip_address: str | None = None, user_agent: str | None = None
+    db: Session,
+    user: User,
+    *,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+    remember: bool = False,
 ) -> SessionTokens:
-    settings = get_settings()
     now = datetime.now(UTC)
     session_token = secrets.token_urlsafe(48)
     csrf_token = secrets.token_urlsafe(32)
@@ -39,7 +50,7 @@ def create_session(
         user_agent=(user_agent or "")[:512] or None,
         created_at=now,
         last_seen_at=now,
-        expires_at=now + timedelta(minutes=settings.session_idle_minutes),
+        expires_at=now + timedelta(seconds=session_ttl_seconds(remember)),
     )
     db.add(session)
     db.flush()

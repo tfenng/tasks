@@ -5,7 +5,7 @@ import json
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from task_control.api.schemas import DefinitionCreate, DefinitionUpdate
@@ -25,6 +25,7 @@ from task_control.infrastructure.db.models import (
     TaskRun,
     User,
 )
+from task_control.infrastructure.executors.output import cleanup_run_output
 
 
 def _checksum(payload: dict) -> str:
@@ -285,7 +286,7 @@ def archive_definition(
         db.scalars(
             select(TaskRun).where(
                 TaskRun.definition_id == definition.id,
-                TaskRun.status.in_(["scheduled", "queued"]),
+                TaskRun.status.in_(["scheduled", "queued", "retry_wait"]),
             )
         )
     )
@@ -313,6 +314,48 @@ def archive_definition(
         details={"cancelled_runs": len(runs)},
     )
     return definition
+
+
+def delete_definition(
+    db: Session,
+    actor: User,
+    definition: TaskDefinition,
+    *,
+    delete_runs: bool = False,
+    correlation_id: str = "-",
+) -> int:
+    running = (
+        db.scalar(
+            select(func.count())
+            .select_from(TaskRun)
+            .where(
+                TaskRun.definition_id == definition.id,
+                TaskRun.status == "running",
+            )
+        )
+        or 0
+    )
+    if running:
+        raise ConflictError("definition has running tasks; cancel them first")
+    archive_definition(db, actor, definition, correlation_id=correlation_id)
+    deleted_runs = 0
+    if delete_runs:
+        run_ids = list(db.scalars(select(TaskRun.id).where(TaskRun.definition_id == definition.id)))
+        if run_ids:
+            db.execute(delete(TaskRun).where(TaskRun.definition_id == definition.id))
+            deleted_runs = len(run_ids)
+            for run_id in run_ids:
+                cleanup_run_output(str(run_id))
+    record_audit(
+        db,
+        actor,
+        "definition.delete",
+        "task_definition",
+        str(definition.id),
+        correlation_id=correlation_id,
+        details={"archived": True, "deleted_runs": deleted_runs},
+    )
+    return deleted_runs
 
 
 def active_version(

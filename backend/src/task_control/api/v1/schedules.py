@@ -3,12 +3,18 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from sqlalchemy.orm import Session
 
 from task_control.api.deps import AuthContext, require_csrf, require_roles
 from task_control.api.errors import correlation_id
-from task_control.api.schemas import ScheduleCreate, ScheduleList, ScheduleOut, ScheduleUpdate
+from task_control.api.schemas import (
+    ScheduleCreate,
+    ScheduleDeleteResult,
+    ScheduleList,
+    ScheduleOut,
+    ScheduleUpdate,
+)
 from task_control.application.schedules import service
 from task_control.domain.enums import Role
 from task_control.domain.errors import (
@@ -92,6 +98,34 @@ def create_schedule(
     )
     db.commit()
     return _out(schedule)
+
+
+@router.delete("", response_model=ScheduleDeleteResult)
+def delete_all_schedules(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    ctx: Annotated[AuthContext, Depends(require_csrf)],
+) -> ScheduleDeleteResult:
+    if ctx.user.role != Role.ADMIN.value:
+        raise ForbiddenError("only admins can delete all schedules")
+    deleted = service.delete_all_schedules(db, ctx.user, correlation_id=correlation_id(request))
+    db.commit()
+    return ScheduleDeleteResult(deleted=deleted)
+
+
+@router.delete("/{schedule_id}", status_code=204)
+def delete_schedule(
+    schedule_id: UUID,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    ctx: Annotated[AuthContext, Depends(require_csrf)],
+) -> Response:
+    if ctx.user.role not in {Role.ADMIN.value, Role.OPERATOR.value}:
+        raise ForbiddenError("insufficient role")
+    schedule = service.get_schedule(db, schedule_id)
+    service.delete_schedule(db, ctx.user, schedule, correlation_id=correlation_id(request))
+    db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/{schedule_id}", response_model=ScheduleOut)

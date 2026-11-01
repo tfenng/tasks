@@ -114,3 +114,49 @@ def test_local_executor_infers_python_for_py_without_shebang(tmp_path: Path):
     )
     assert result.status == "succeeded"
     assert "python fallback ok" in (result.stdout or "")
+
+
+def test_local_executor_writes_live_output_files(tmp_path: Path):
+    from task_control.infrastructure.executors.output import STDERR_NAME, STDOUT_NAME, attempt_dir
+
+    script = tmp_path / "live.py"
+    script.write_text(
+        "import sys\n"
+        "print('live stdout', flush=True)\n"
+        "print('live stderr', file=sys.stderr, flush=True)\n"
+    )
+    result = LocalScriptExecutor().execute(
+        ExecutionContext(
+            run_id="r7",
+            attempt_no=1,
+            parameters={},
+            target={"argv": [sys.executable, str(script)]},
+            timeout_seconds=10,
+            output_limit_bytes=1024,
+        )
+    )
+    assert result.status == "succeeded"
+    directory = attempt_dir("r7", 1)
+    assert "live stdout" in (directory / STDOUT_NAME).read_text()
+    assert "live stderr" in (directory / STDERR_NAME).read_text()
+
+
+def test_local_executor_redacts_live_output_files(tmp_path: Path):
+    from task_control.infrastructure.executors.output import STDOUT_NAME, attempt_dir
+
+    script = tmp_path / "secret_live.py"
+    script.write_text("print('secret-value', flush=True)\n")
+    LocalScriptExecutor().execute(
+        ExecutionContext(
+            run_id="r8",
+            attempt_no=1,
+            parameters={},
+            target={"argv": [sys.executable, str(script)]},
+            timeout_seconds=10,
+            output_limit_bytes=1024,
+            secret_values=("secret-value",),
+        )
+    )
+    content = (attempt_dir("r8", 1) / STDOUT_NAME).read_text()
+    assert "secret-value" not in content
+    assert "***" in content

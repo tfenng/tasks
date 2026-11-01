@@ -8,10 +8,17 @@ from sqlalchemy.orm import Session
 
 from task_control.api.deps import AuthContext, require_csrf, require_roles
 from task_control.api.errors import correlation_id
-from task_control.api.schemas import AttemptOut, RunCreate, RunDetail, RunList, RunOut
+from task_control.api.schemas import (
+    AttemptOut,
+    RunCreate,
+    RunDetail,
+    RunList,
+    RunLiveOutput,
+    RunOut,
+)
 from task_control.application.runs import service
 from task_control.domain.enums import Role
-from task_control.domain.errors import ForbiddenError
+from task_control.domain.errors import ForbiddenError, NotFoundError
 from task_control.infrastructure.db.models import (
     TaskAttempt,
     TaskDefinition,
@@ -19,6 +26,13 @@ from task_control.infrastructure.db.models import (
     TaskRun,
 )
 from task_control.infrastructure.db.session import get_db
+from task_control.infrastructure.executors.output import (
+    STDERR_NAME,
+    STDOUT_NAME,
+    attempt_dir,
+    read_tail,
+    tail_text,
+)
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -115,7 +129,50 @@ def get_run(
         executor_type=version.executor_type if version else None,
         executor_config=version.executor_config if version else None,
         parameter_schema=version.parameter_schema if version else None,
+        timeout_seconds=version.timeout_seconds if version else None,
         attempts=[_attempt_out(item) for item in service.attempts_for(db, run_id)],
+    )
+
+
+@router.get("/{run_id}/live-output", response_model=RunLiveOutput)
+def get_live_output(
+    run_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+    ctx: Annotated[AuthContext, Depends(require_roles(Role.ADMIN, Role.OPERATOR, Role.VIEWER))],
+    attempt_no: int | None = Query(default=None, ge=1),
+    max_bytes: int = Query(default=256 * 1024, ge=1024, le=4 * 1024 * 1024),
+) -> RunLiveOutput:
+    run = service.get_run(db, run_id)
+    attempts = service.attempts_for(db, run_id)
+    if not attempts:
+        raise NotFoundError("run has no attempts yet")
+    attempt = None
+    if attempt_no is None:
+        attempt = attempts[-1]
+    else:
+        attempt = next((item for item in attempts if item.attempt_no == attempt_no), None)
+    if attempt is None:
+        raise NotFoundError("attempt not found")
+
+    directory = attempt_dir(str(run.id), attempt.attempt_no)
+    stdout, stdout_bytes, stdout_truncated = read_tail(directory / STDOUT_NAME, max_bytes)
+    stderr, stderr_bytes, stderr_truncated = read_tail(directory / STDERR_NAME, max_bytes)
+    if not stdout and attempt.stdout_excerpt:
+        stdout, stdout_bytes, stdout_truncated = tail_text(attempt.stdout_excerpt, max_bytes)
+    if not stderr and attempt.stderr_excerpt:
+        stderr, stderr_bytes, stderr_truncated = tail_text(attempt.stderr_excerpt, max_bytes)
+
+    return RunLiveOutput(
+        run_id=run.id,
+        attempt_no=attempt.attempt_no,
+        status=attempt.status,
+        running=attempt.status == "running",
+        stdout=stdout,
+        stderr=stderr,
+        stdout_bytes=stdout_bytes,
+        stderr_bytes=stderr_bytes,
+        stdout_truncated=stdout_truncated,
+        stderr_truncated=stderr_truncated,
     )
 
 

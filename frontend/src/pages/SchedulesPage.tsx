@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { Button, Card, Collapse, DatePicker, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, Typography, message } from "antd";
-import { PlusOutlined, ReloadOutlined } from "@ant-design/icons";
+import { Button, Card, Collapse, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Typography, message } from "antd";
+import { DeleteOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
 import dayjs, { Dayjs } from "dayjs";
-import { createSchedule, listDefinitions, listSchedules, scheduleAction } from "../api";
+import { createSchedule, deleteAllSchedules, deleteSchedule, listDefinitions, listSchedules, scheduleAction } from "../api";
 import { parseShellArgs } from "../lib/args";
 import type { Definition, Schedule, User } from "../types";
 
@@ -138,6 +138,26 @@ export default function SchedulesPage({ user }: { user: User }) {
     }
   }
 
+  async function remove(schedule: Schedule) {
+    try {
+      await deleteSchedule(schedule.id);
+      message.success("调度已删除");
+      refresh();
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  }
+
+  async function removeAll() {
+    try {
+      const result = await deleteAllSchedules();
+      message.success(`已删除 ${result.deleted} 个调度`);
+      refresh();
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  }
+
   return (
     <div>
       <div className="page-head">
@@ -146,6 +166,21 @@ export default function SchedulesPage({ user }: { user: User }) {
           <Button icon={<ReloadOutlined />} onClick={refresh} loading={loading}>
             刷新
           </Button>
+          {user.role === "admin" && (
+            <Popconfirm
+              title="删除全部调度？"
+              description="删除后不可恢复。运行记录会保留，但不再关联调度；已排队或运行中的任务不会被取消。"
+              okText="删除全部"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              onConfirm={removeAll}
+              disabled={items.length === 0}
+            >
+              <Button danger icon={<DeleteOutlined />} disabled={items.length === 0}>
+                删除全部
+              </Button>
+            </Popconfirm>
+          )}
           {user.role !== "viewer" && (
             <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
               新建调度
@@ -178,6 +213,18 @@ export default function SchedulesPage({ user }: { user: User }) {
                   {item.status === "active" && <Button size="small" onClick={() => action(item, "pause")}>暂停</Button>}
                   {item.status === "paused" && <Button size="small" onClick={() => action(item, "resume")}>恢复</Button>}
                   {["active", "paused"].includes(item.status) && <Button size="small" danger onClick={() => action(item, "cancel")}>取消</Button>}
+                  {user.role !== "viewer" && (
+                    <Popconfirm
+                      title="删除这个调度？"
+                      description="运行记录会保留，但不再关联此调度；已排队或运行中的任务不会被取消。"
+                      okText="删除"
+                      cancelText="取消"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => remove(item)}
+                    >
+                      <Button size="small" danger type="link">删除</Button>
+                    </Popconfirm>
+                  )}
                 </Space>
               ),
             },

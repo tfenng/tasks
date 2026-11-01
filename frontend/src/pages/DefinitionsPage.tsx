@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Button, Card, Form, Input, InputNumber, Modal, Select, Table, Tabs, Tag, Typography, message } from "antd";
-import { PlusOutlined } from "@ant-design/icons";
+import { Button, Card, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tabs, Tag, Typography, message } from "antd";
+import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import { Link } from "react-router-dom";
 import { createDefinition, listDefinitions, listTargets } from "../api";
+import DeleteDefinitionModal from "../components/DeleteDefinitionModal";
 import ScriptPicker from "../components/ScriptPicker";
 import { scriptBaseName } from "../lib/args";
 import type { Definition, Target, User } from "../types";
@@ -17,11 +18,13 @@ export default function DefinitionsPage({ user }: { user: User }) {
   const [scriptPath, setScriptPath] = useState("");
   const [interpreter, setInterpreter] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Definition | null>(null);
   const [form] = Form.useForm();
 
   function refresh() {
     setLoading(true);
-    Promise.all([listDefinitions(), listTargets().catch(() => ({ items: [] }))])
+    Promise.all([listDefinitions(showArchived ? undefined : false), listTargets().catch(() => ({ items: [] }))])
       .then(([page, targetPage]) => {
         setItems(page.items);
         setTargets(targetPage.items.filter((item) => item.is_active));
@@ -29,7 +32,7 @@ export default function DefinitionsPage({ user }: { user: User }) {
       .finally(() => setLoading(false));
   }
 
-  useEffect(refresh, []);
+  useEffect(refresh, [showArchived]);
 
   function resetForm() {
     form.resetFields();
@@ -116,11 +119,17 @@ export default function DefinitionsPage({ user }: { user: User }) {
     <div>
       <div className="page-head">
         <Typography.Title level={3}>任务定义</Typography.Title>
-        {user.role !== "viewer" && (
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>
-            新建定义
-          </Button>
-        )}
+        <Space>
+          <Space size={4}>
+            <Typography.Text type="secondary">显示已归档</Typography.Text>
+            <Switch size="small" checked={showArchived} onChange={setShowArchived} />
+          </Space>
+          {user.role !== "viewer" && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>
+              新建定义
+            </Button>
+          )}
+        </Space>
       </div>
       <Card>
         <Table<Definition>
@@ -134,11 +143,23 @@ export default function DefinitionsPage({ user }: { user: User }) {
             { title: "执行器", render: (_, item) => item.active_version?.executor_type ?? "-" },
             { title: "状态", render: (_, item) => <Tag color={item.is_archived ? "default" : "green"}>{item.is_archived ? "已归档" : "启用"}</Tag> },
             { title: "更新时间", dataIndex: "updated_at" },
+            ...(user.role !== "viewer"
+              ? [
+                  {
+                    title: "操作",
+                    render: (_: unknown, item: Definition) => (
+                      <Button size="small" danger icon={<DeleteOutlined />} onClick={() => setDeleteTarget(item)}>
+                        删除
+                      </Button>
+                    ),
+                  },
+                ]
+              : []),
           ]}
         />
       </Card>
       <Modal title="新建任务定义" open={open} onCancel={() => setOpen(false)} onOk={submit} confirmLoading={saving} width={760}>
-        <Form form={form} layout="vertical" initialValues={{ timeout_seconds: 60, max_attempts: 1, max_concurrency: 1 }}>
+        <Form form={form} layout="vertical" initialValues={{ timeout_seconds: 21600, max_attempts: 1, max_concurrency: 1 }}>
           <Form.Item name="key" label="业务键" rules={[{ required: true, pattern: /^[a-z][a-z0-9_-]{1,99}$/, message: "小写字母开头，可含数字、_、-" }]}>
             <Input placeholder="demo-hello" />
           </Form.Item>
@@ -153,7 +174,9 @@ export default function DefinitionsPage({ user }: { user: User }) {
             ]}
           />
           <div className="form-row">
-            <Form.Item name="timeout_seconds" label="超时（秒）"><InputNumber min={1} max={86400} /></Form.Item>
+            <Form.Item name="timeout_seconds" label="超时（秒）" extra="默认 6 小时；长任务按实际耗时调大，最大 24 小时。">
+              <InputNumber min={1} max={86400} style={{ width: "100%" }} />
+            </Form.Item>
             <Form.Item name="max_attempts" label="最大尝试次数"><InputNumber min={1} max={10} /></Form.Item>
             <Form.Item name="max_concurrency" label="并发上限"><InputNumber min={1} max={100} /></Form.Item>
           </div>
@@ -167,6 +190,14 @@ export default function DefinitionsPage({ user }: { user: User }) {
           setInterpreter("");
           form.setFieldValue("name", scriptBaseName(absolutePath));
           setPickerOpen(false);
+        }}
+      />
+      <DeleteDefinitionModal
+        definition={deleteTarget}
+        onCancel={() => setDeleteTarget(null)}
+        onDeleted={() => {
+          setDeleteTarget(null);
+          refresh();
         }}
       />
     </div>

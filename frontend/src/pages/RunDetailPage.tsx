@@ -1,9 +1,15 @@
-import { useEffect, useState } from "react";
-import { Button, Card, Descriptions, Modal, Space, Table, Tag, Typography, message } from "antd";
+import { useEffect, useRef, useState } from "react";
+import { Button, Card, Descriptions, Modal, Space, Switch, Table, Tag, Typography, message } from "antd";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import dayjs from "dayjs";
-import { cancelRun, getRun, retryRun } from "../api";
-import type { Attempt, Run, User } from "../types";
+import { cancelRun, getRun, getRunLiveOutput, retryRun } from "../api";
+import type { Attempt, LiveOutput, Run, User } from "../types";
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
 
 export default function RunDetailPage({ user }: { user: User }) {
   const { id } = useParams();
@@ -11,17 +17,71 @@ export default function RunDetailPage({ user }: { user: User }) {
   const [run, setRun] = useState<Run | null>(null);
   const [loading, setLoading] = useState(true);
   const [outputAttempt, setOutputAttempt] = useState<Attempt | null>(null);
+  const [live, setLive] = useState<LiveOutput | null>(null);
+  const [autoScroll, setAutoScroll] = useState(true);
+  const stdoutRef = useRef<HTMLPreElement>(null);
+  const stderrRef = useRef<HTMLPreElement>(null);
+  const refreshingRef = useRef(false);
 
-  function refresh() {
+  function refresh(silent = false) {
     if (!id) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
     getRun(id)
       .then(setRun)
       .catch((error) => message.error((error as Error).message))
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!silent) setLoading(false);
+      });
   }
 
   useEffect(refresh, [id]);
+
+  const runId = run?.id;
+  const runStatus = run?.status;
+  const latestAttemptNo = run?.attempts?.length
+    ? run.attempts[run.attempts.length - 1].attempt_no
+    : undefined;
+
+  useEffect(() => {
+    if (!runId || latestAttemptNo == null) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const running = runStatus === "running";
+
+    async function load() {
+      try {
+        const data = await getRunLiveOutput(runId!, latestAttemptNo);
+        if (cancelled) return;
+        setLive(data);
+        if (!data.running && runStatus === "running" && !refreshingRef.current) {
+          refreshingRef.current = true;
+          refresh(true);
+          refreshingRef.current = false;
+        }
+      } catch {
+        // 输出文件可能尚未创建，继续轮询
+      }
+      if (!cancelled && running) {
+        timer = window.setTimeout(load, 1500);
+      }
+    }
+
+    setLive(null);
+    load();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId, runStatus, latestAttemptNo]);
+
+  useEffect(() => {
+    if (!autoScroll) return;
+    for (const ref of [stdoutRef, stderrRef]) {
+      const element = ref.current;
+      if (element) element.scrollTop = element.scrollHeight;
+    }
+  }, [live?.stdout, live?.stderr, autoScroll]);
 
   async function cancel() {
     if (!id) return;
@@ -52,6 +112,8 @@ export default function RunDetailPage({ user }: { user: User }) {
     : run.executor_type === "ssh"
       ? config.command
       : `${config.method || "GET"} ${config.url || config.path || ""}`;
+  const hasAttempt = (run.attempts?.length || 0) > 0;
+  const outputEmptyText = live?.running ? "等待输出…" : "(空)";
 
   return (
     <div>
@@ -71,7 +133,8 @@ export default function RunDetailPage({ user }: { user: User }) {
           </Descriptions.Item>
           <Descriptions.Item label="定义版本">{run.definition_version_no ?? "-"}</Descriptions.Item>
           <Descriptions.Item label="执行入口">{run.executor_type || "-"}</Descriptions.Item>
-          <Descriptions.Item label="执行命令"><code>{command || "-"}</code></Descriptions.Item>
+          <Descriptions.Item label="超时限制">{run.timeout_seconds != null ? `${run.timeout_seconds} 秒` : "-"}</Descriptions.Item>
+          <Descriptions.Item label="执行命令" span={2}><code>{command || "-"}</code></Descriptions.Item>
           <Descriptions.Item label="触发">{run.schedule_id ? `调度/${run.trigger_type}` : run.trigger_type}</Descriptions.Item>
           <Descriptions.Item label="尝试">{run.attempt_count}/{run.max_attempts}</Descriptions.Item>
           <Descriptions.Item label="调度 ID">{run.schedule_id || "-"}</Descriptions.Item>
@@ -84,6 +147,46 @@ export default function RunDetailPage({ user }: { user: User }) {
             <pre>{(run.arguments || []).join(" ") || "-"}</pre>
           </Descriptions.Item>
         </Descriptions>
+
+        {hasAttempt && (
+          <div style={{ marginTop: 24 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+              <Space wrap>
+                <Typography.Title level={4} style={{ margin: 0 }}>执行输出</Typography.Title>
+                <Tag color={live?.running ? "processing" : "default"}>{live?.running ? "实时" : "已结束"}</Tag>
+                <Typography.Text type="secondary">第 {latestAttemptNo} 次尝试</Typography.Text>
+                {run.timeout_seconds != null && (
+                  <Typography.Text type="secondary">超时限制 {run.timeout_seconds} 秒</Typography.Text>
+                )}
+              </Space>
+              <Space>
+                <Typography.Text type="secondary">自动滚动</Typography.Text>
+                <Switch size="small" checked={autoScroll} onChange={setAutoScroll} />
+              </Space>
+            </div>
+            {live?.running && (
+              <Typography.Paragraph type="secondary" style={{ margin: "8px 0" }}>
+                每 1.5 秒自动刷新，显示最近 256 KB。
+              </Typography.Paragraph>
+            )}
+            <Typography.Text type="secondary">标准输出</Typography.Text>
+            {live?.stdout_truncated && <Tag color="orange" style={{ marginLeft: 8 }}>仅显示末尾内容</Tag>}
+            <pre ref={stdoutRef} className="output live-output">
+              {live?.stdout || outputEmptyText}
+            </pre>
+            <Typography.Text type="secondary">错误输出</Typography.Text>
+            {live?.stderr_truncated && <Tag color="orange" style={{ marginLeft: 8 }}>仅显示末尾内容</Tag>}
+            <pre ref={stderrRef} className="output live-output">
+              {live?.stderr || outputEmptyText}
+            </pre>
+            {live && (
+              <Typography.Text type="secondary">
+                标准输出 {formatBytes(live.stdout_bytes)} / 错误输出 {formatBytes(live.stderr_bytes)}
+              </Typography.Text>
+            )}
+          </div>
+        )}
+
         <Typography.Title level={4} style={{ marginTop: 24 }}>执行尝试</Typography.Title>
         <Table
           rowKey="id"

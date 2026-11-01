@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Button, Card, Descriptions, Form, Input, InputNumber, Modal, Select, Space, Tabs, Tag, Typography, message } from "antd";
-import { ArrowLeftOutlined, EditOutlined } from "@ant-design/icons";
+import { ArrowLeftOutlined, DeleteOutlined, EditOutlined } from "@ant-design/icons";
 import { useNavigate, useParams } from "react-router-dom";
 import { getDefinition, listTargets, updateDefinition } from "../api";
+import DeleteDefinitionModal from "../components/DeleteDefinitionModal";
 import ScriptPicker from "../components/ScriptPicker";
 import type { Definition, Target, User } from "../types";
 
@@ -18,6 +19,7 @@ export default function DefinitionDetailPage({ user }: { user: User }) {
   const [scriptPath, setScriptPath] = useState("");
   const [interpreter, setInterpreter] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [form] = Form.useForm();
 
   function refresh() {
@@ -143,7 +145,12 @@ export default function DefinitionDetailPage({ user }: { user: User }) {
           <Button icon={<ArrowLeftOutlined />} onClick={() => navigate("/definitions")}>返回</Button>
           <Typography.Title level={3}>{definition.name}</Typography.Title>
         </Space>
-        {user.role !== "viewer" && <Button type="primary" icon={<EditOutlined />} onClick={openEdit}>编辑（生成新版本）</Button>}
+        {user.role !== "viewer" && (
+          <Space>
+            <Button danger icon={<DeleteOutlined />} onClick={() => setDeleteOpen(true)}>删除</Button>
+            <Button type="primary" icon={<EditOutlined />} onClick={openEdit}>编辑（生成新版本）</Button>
+          </Space>
+        )}
       </div>
       <Card loading={loading}>
         <Descriptions column={2} bordered size="small">
@@ -171,7 +178,9 @@ export default function DefinitionDetailPage({ user }: { user: User }) {
             ]}
           />
           <div className="form-row">
-            <Form.Item name="timeout_seconds" label="超时（秒）"><InputNumber min={1} max={86400} /></Form.Item>
+            <Form.Item name="timeout_seconds" label="超时（秒）" extra="默认 6 小时；长任务按实际耗时调大，最大 24 小时。">
+              <InputNumber min={1} max={86400} style={{ width: "100%" }} />
+            </Form.Item>
             <Form.Item name="max_attempts" label="最大尝试次数"><InputNumber min={1} max={10} /></Form.Item>
             <Form.Item name="max_concurrency" label="并发上限"><InputNumber min={1} max={100} /></Form.Item>
           </div>
@@ -184,6 +193,14 @@ export default function DefinitionDetailPage({ user }: { user: User }) {
           setScriptPath(absolutePath);
           setInterpreter("");
           setPickerOpen(false);
+        }}
+      />
+      <DeleteDefinitionModal
+        definition={deleteOpen ? definition : null}
+        onCancel={() => setDeleteOpen(false)}
+        onDeleted={() => {
+          setDeleteOpen(false);
+          navigate("/definitions");
         }}
       />
     </div>

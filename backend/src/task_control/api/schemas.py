@@ -31,6 +31,7 @@ class ErrorResponse(BaseModel):
 class LoginRequest(BaseModel):
     username: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=1, max_length=256)
+    remember: bool = False
 
 
 class UserOut(ORMModel):
@@ -134,7 +135,7 @@ class DefinitionVersionInput(BaseModel):
         default_factory=lambda: {"type": "object", "properties": {}, "additionalProperties": True}
     )
     executor_config: dict[str, Any]
-    timeout_seconds: int = Field(default=60, ge=1, le=86400)
+    timeout_seconds: int = Field(default=21600, ge=1, le=86400)
     retry_policy: RetryPolicy = Field(default_factory=RetryPolicy)
     max_concurrency: int = Field(default=1, ge=1, le=100)
 
@@ -184,6 +185,11 @@ class DefinitionList(BaseModel):
     page_size: int
     total: int
     total_pages: int
+
+
+class DefinitionDeleteResult(BaseModel):
+    archived: bool
+    deleted_runs: int
 
 
 class TriggerInput(BaseModel):
@@ -263,6 +269,10 @@ class ScheduleList(BaseModel):
     total_pages: int
 
 
+class ScheduleDeleteResult(BaseModel):
+    deleted: int
+
+
 class RunOut(ORMModel):
     id: UUID
     definition_id: UUID
@@ -314,7 +324,21 @@ class RunDetail(RunOut):
     executor_type: str | None = None
     executor_config: dict[str, Any] | None = None
     parameter_schema: dict[str, Any] | None = None
+    timeout_seconds: int | None = None
     attempts: list[AttemptOut]
+
+
+class RunLiveOutput(BaseModel):
+    run_id: UUID
+    attempt_no: int
+    status: str
+    running: bool
+    stdout: str
+    stderr: str
+    stdout_bytes: int
+    stderr_bytes: int
+    stdout_truncated: bool
+    stderr_truncated: bool
 
 
 class RunList(BaseModel):

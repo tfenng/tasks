@@ -159,3 +159,88 @@ def test_once_schedule_without_fire_at_runs_immediately(logged_in_client, tmp_pa
     assert worker_once(worker) is True
     detail = logged_in_client.get(f"/api/v1/runs/{run_id}").json()
     assert detail["status"] == "succeeded"
+
+
+def test_delete_schedule_keeps_run_history(logged_in_client, tmp_path):
+    script = tmp_path / "delete_me.py"
+    script.write_text("print('delete me')\n")
+    definition = _definition(logged_in_client, script, key="delete-demo")
+    version = definition["active_version"]
+
+    response = logged_in_client.post(
+        "/api/v1/schedules",
+        json={
+            "definition_id": definition["id"],
+            "definition_version_id": version["id"],
+            "name": "delete one",
+            "trigger": {"type": "once"},
+            "timezone": "UTC",
+            "parameters": {"name": "bob"},
+        },
+    )
+    assert response.status_code == 201, response.text
+    schedule = response.json()
+
+    scheduler_once()
+    with SessionLocal() as db:
+        run = db.query(TaskRun).filter(TaskRun.schedule_id == schedule["id"]).one()
+        run_id = str(run.id)
+
+    deleted = logged_in_client.delete(f"/api/v1/schedules/{schedule['id']}")
+    assert deleted.status_code == 204, deleted.text
+
+    with SessionLocal() as db:
+        run = db.get(TaskRun, run_id)
+        assert run is not None
+        assert run.schedule_id is None
+
+    detail = logged_in_client.get(f"/api/v1/runs/{run_id}")
+    assert detail.status_code == 200
+    assert detail.json()["schedule_id"] is None
+
+
+def test_delete_all_schedules_keeps_runs(logged_in_client, tmp_path):
+    script = tmp_path / "delete_all.py"
+    script.write_text("print('delete all')\n")
+    definition = _definition(logged_in_client, script, key="delete-all-demo")
+    version = definition["active_version"]
+
+    schedules = []
+    for name in ("first", "second"):
+        response = logged_in_client.post(
+            "/api/v1/schedules",
+            json={
+                "definition_id": definition["id"],
+                "definition_version_id": version["id"],
+                "name": name,
+                "trigger": {"type": "interval", "interval_seconds": 60},
+                "timezone": "UTC",
+                "parameters": {"name": "bob"},
+            },
+        )
+        assert response.status_code == 201, response.text
+        schedules.append(response.json())
+
+    with SessionLocal() as db:
+        db.execute(
+            update(Schedule)
+            .where(Schedule.id == schedules[0]["id"])
+            .values(next_fire_at=datetime.now(UTC) - timedelta(seconds=1))
+        )
+        db.commit()
+    scheduler_once()
+    with SessionLocal() as db:
+        run = db.query(TaskRun).filter(TaskRun.schedule_id == schedules[0]["id"]).one()
+        run_id = str(run.id)
+
+    deleted = logged_in_client.delete("/api/v1/schedules")
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["deleted"] == 2
+
+    listing = logged_in_client.get("/api/v1/schedules")
+    assert listing.json()["total"] == 0
+
+    with SessionLocal() as db:
+        run = db.get(TaskRun, run_id)
+        assert run is not None
+        assert run.schedule_id is None

@@ -19,6 +19,7 @@ const ACTION_LABELS: Record<string, string> = {
   "definition.enable": "启用任务",
   "definition.disable": "禁用任务",
   "definition.archive": "归档任务",
+  "definition.delete": "删除任务",
   "run.create": "提交运行",
   "run.retry": "重试运行",
   "run.cancel": "取消运行",

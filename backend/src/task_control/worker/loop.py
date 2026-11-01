@@ -4,6 +4,7 @@ import json
 import os
 import signal
 import socket
+import threading
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -39,6 +40,39 @@ class ClaimedRun:
     credential: dict | None
     timeout_seconds: int
     secret_values: tuple[str, ...]
+
+
+class LeaseHeartbeat:
+    """Keep a running run's lease alive while a long task executes."""
+
+    def __init__(self, run_id: UUID, lease_seconds: int) -> None:
+        self.run_id = run_id
+        self.interval = max(lease_seconds / 3, 1.0)
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def __enter__(self) -> LeaseHeartbeat:
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self._stop.set()
+        self._thread.join(timeout=5)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval):
+            try:
+                with session_scope() as db:
+                    run = db.get(TaskRun, self.run_id)
+                    if run is None or run.status != "running":
+                        return
+                    run.lease_expires_at = datetime.now(UTC) + timedelta(
+                        seconds=get_settings().lease_seconds
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.bind(run_id=str(self.run_id), component="worker").warning(
+                    "lease heartbeat failed: {}", exc
+                )
 
 
 def _secret_values(schema: dict, parameters: dict) -> tuple[str, ...]:
@@ -214,18 +248,19 @@ def finish_run(claimed: ClaimedRun, result) -> None:
 
 def execute_claimed(worker_id: UUID, claimed: ClaimedRun) -> None:
     executor = registry.create(claimed.executor_type)
-    result = executor.execute(
-        ExecutionContext(
-            run_id=str(claimed.run_id),
-            attempt_no=claimed.attempt_no,
-            parameters=claimed.parameters,
-            target=claimed.target,
-            credential=claimed.credential,
-            timeout_seconds=claimed.timeout_seconds,
-            output_limit_bytes=get_settings().output_limit_bytes,
-            secret_values=claimed.secret_values,
+    with LeaseHeartbeat(claimed.run_id, get_settings().lease_seconds):
+        result = executor.execute(
+            ExecutionContext(
+                run_id=str(claimed.run_id),
+                attempt_no=claimed.attempt_no,
+                parameters=claimed.parameters,
+                target=claimed.target,
+                credential=claimed.credential,
+                timeout_seconds=claimed.timeout_seconds,
+                output_limit_bytes=get_settings().output_limit_bytes,
+                secret_values=claimed.secret_values,
+            )
         )
-    )
     finish_run(claimed, result)
 
 

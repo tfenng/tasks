@@ -100,7 +100,21 @@ export interface Run {
     target_id?: string;
   } | null;
   parameter_schema?: Record<string, unknown> | null;
+  timeout_seconds?: number | null;
   attempts?: Attempt[];
+}
+
+export interface LiveOutput {
+  run_id: string;
+  attempt_no: number;
+  status: string;
+  running: boolean;
+  stdout: string;
+  stderr: string;
+  stdout_bytes: number;
+  stderr_bytes: number;
+  stdout_truncated: boolean;
+  stderr_truncated: boolean;
 }
 
 export interface Schedule {

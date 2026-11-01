@@ -7,6 +7,7 @@ os.environ.setdefault(
     "TASK_CONTROL_DATABASE_URL", "postgresql+psycopg://localhost:5432/task_control_test"
 )
 os.environ.setdefault("TASK_CONTROL_SCRIPT_ROOT", tempfile.mkdtemp(prefix="tc-scripts-"))
+os.environ.setdefault("TASK_CONTROL_OUTPUT_ROOT", tempfile.mkdtemp(prefix="tc-output-"))
 os.environ.setdefault("TASK_CONTROL_COOKIE_SECURE", "false")
 os.environ.setdefault(
     "TASK_CONTROL_SECRET_KEYS",

@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 from croniter import croniter
 from loguru import logger
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from task_control.api.schemas import ScheduleCreate, ScheduleUpdate
@@ -275,6 +275,40 @@ def cancel_schedule(
         db, actor, "schedule.cancel", "schedule", str(schedule.id), correlation_id=correlation_id
     )
     return schedule
+
+
+def delete_schedule(
+    db: Session, actor: User, schedule: Schedule, *, correlation_id: str = "-"
+) -> None:
+    record_audit(
+        db,
+        actor,
+        "schedule.delete",
+        "schedule",
+        str(schedule.id),
+        correlation_id=correlation_id,
+        details={"name": schedule.name, "definition_id": str(schedule.definition_id)},
+    )
+    db.delete(schedule)
+    db.flush()
+
+
+def delete_all_schedules(db: Session, actor: User, *, correlation_id: str = "-") -> int:
+    total = db.scalar(select(func.count()).select_from(Schedule)) or 0
+    if total == 0:
+        return 0
+    db.execute(delete(Schedule))
+    record_audit(
+        db,
+        actor,
+        "schedule.delete_all",
+        "schedule",
+        None,
+        correlation_id=correlation_id,
+        details={"deleted": total},
+    )
+    db.flush()
+    return total
 
 
 def create_run_from_schedule(

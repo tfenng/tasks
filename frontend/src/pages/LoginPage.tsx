@@ -1,15 +1,15 @@
 import { useState } from "react";
-import { Button, Card, Form, Input, Typography, message } from "antd";
+import { Button, Card, Checkbox, Form, Input, Typography, message } from "antd";
 import { login } from "../api";
 import type { User } from "../types";
 
 export default function LoginPage({ onLogin }: { onLogin: (user: User) => void }) {
   const [loading, setLoading] = useState(false);
 
-  async function submit(values: { username: string; password: string }) {
+  async function submit(values: { username: string; password: string; remember?: boolean }) {
     setLoading(true);
     try {
-      const result = await login(values.username, values.password);
+      const result = await login(values.username, values.password, values.remember ?? false);
       onLogin(result.user);
     } catch (error) {
       message.error((error as Error).message);
@@ -29,6 +29,9 @@ export default function LoginPage({ onLogin }: { onLogin: (user: User) => void }
           </Form.Item>
           <Form.Item name="password" label="密码" rules={[{ required: true }]}>
             <Input.Password autoComplete="current-password" />
+          </Form.Item>
+          <Form.Item name="remember" valuePropName="checked" initialValue={false} style={{ marginBottom: 16 }}>
+            <Checkbox>记住我（一周内免登录）</Checkbox>
           </Form.Item>
           <Button type="primary" htmlType="submit" block loading={loading}>
             登录

@@ -13,6 +13,7 @@ from task_control.infrastructure.db.models import (
     TaskRun,
 )
 from task_control.infrastructure.db.session import session_scope
+from task_control.infrastructure.executors.output import cleanup_output_root
 
 
 def run_retention() -> dict[str, int]:
@@ -62,6 +63,7 @@ def run_retention() -> dict[str, int]:
         "audit": audit,
         "sessions": sessions,
         "api_tokens": tokens,
+        "outputs": cleanup_output_root(settings.attempt_retention_days * 24 * 60 * 60),
     }
 
 

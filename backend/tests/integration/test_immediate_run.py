@@ -6,7 +6,7 @@ from pathlib import Path
 from task_control.worker.loop import register_worker, run_once
 
 
-def _definition_payload(script: Path) -> dict:
+def _definition_payload(script: Path, *, timeout_seconds: int = 15) -> dict:
     return {
         "key": "demo-hello",
         "name": "Demo Hello",
@@ -26,7 +26,7 @@ def _definition_payload(script: Path) -> dict:
             "executor_config": {
                 "argv": [sys.executable, str(script), "${count}"],
             },
-            "timeout_seconds": 15,
+            "timeout_seconds": timeout_seconds,
             "retry_policy": {"max_attempts": 1},
             "max_concurrency": 1,
         },
@@ -97,3 +97,55 @@ def test_create_definition_and_run(logged_in_client, tmp_path):
     assert body["attempts"][0]["exit_code"] == 0
     assert "hello alice" in body["attempts"][0]["stdout_excerpt"]
     assert "secret-value" not in body["attempts"][0]["stdout_excerpt"]
+
+
+def _submit_and_run(logged_in_client, definition: dict):
+    submitted = logged_in_client.post(
+        "/api/v1/runs",
+        json={
+            "definition_id": definition["id"],
+            "definition_version_id": definition["active_version"]["id"],
+            "parameters": {"name": "alice", "count": 1},
+        },
+    )
+    assert submitted.status_code == 201, submitted.text
+    run = submitted.json()
+    worker_id = register_worker()
+    assert run_once(worker_id) is True
+    return run
+
+
+def test_live_output_endpoint_returns_latest_attempt_output(logged_in_client, tmp_path):
+    script = tmp_path / "stream.py"
+    script.write_text("for index in range(3):\n    print('line', index, flush=True)\n")
+    created = logged_in_client.post("/api/v1/task-definitions", json=_definition_payload(script))
+    assert created.status_code == 201, created.text
+    run = _submit_and_run(logged_in_client, created.json())
+
+    response = logged_in_client.get(f"/api/v1/runs/{run['id']}/live-output")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["attempt_no"] == 1
+    assert body["running"] is False
+    assert "line 0" in body["stdout"]
+    assert "line 2" in body["stdout"]
+    assert body["stdout_bytes"] > 0
+
+
+def test_timeout_keeps_partial_output(logged_in_client, tmp_path):
+    script = tmp_path / "slow.py"
+    script.write_text("import time\nprint('started before timeout', flush=True)\ntime.sleep(5)\n")
+    created = logged_in_client.post(
+        "/api/v1/task-definitions",
+        json=_definition_payload(script, timeout_seconds=1),
+    )
+    assert created.status_code == 201, created.text
+    run = _submit_and_run(logged_in_client, created.json())
+
+    detail = logged_in_client.get(f"/api/v1/runs/{run['id']}")
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["status"] == "failed"
+    assert body["error_code"] == "TIMEOUT"
+    assert body["attempts"][0]["status"] == "timed_out"
+    assert "started before timeout" in (body["attempts"][0]["stdout_excerpt"] or "")

@@ -6,6 +6,7 @@ import type {
   Page,
   Run,
   RunStats,
+  LiveOutput,
   Schedule,
   ScriptList,
   SessionInfo,
@@ -53,10 +54,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
-export async function login(username: string, password: string): Promise<{ user: User; csrf_token: string }> {
+export async function login(username: string, password: string, remember = false): Promise<{ user: User; csrf_token: string }> {
   const result = await request<{ user: User; csrf_token: string }>("/auth/login", {
     method: "POST",
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, remember }),
   });
   localStorage.setItem(CSRF_KEY, result.csrf_token);
   return result;
@@ -71,12 +72,21 @@ export async function logout(): Promise<void> {
   localStorage.removeItem(CSRF_KEY);
 }
 
-export function listDefinitions(): Promise<Page<Definition>> {
-  return request<Page<Definition>>("/task-definitions?page_size=100");
+export function listDefinitions(archived?: boolean): Promise<Page<Definition>> {
+  const query = new URLSearchParams({ page_size: "100" });
+  if (archived !== undefined) query.set("archived", String(archived));
+  return request<Page<Definition>>(`/task-definitions?${query.toString()}`);
 }
 
 export function createDefinition(payload: unknown): Promise<Definition> {
   return request<Definition>("/task-definitions", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function deleteDefinition(id: string, deleteRuns: boolean): Promise<{ archived: boolean; deleted_runs: number }> {
+  return request<{ archived: boolean; deleted_runs: number }>(
+    `/task-definitions/${id}?delete_runs=${deleteRuns}`,
+    { method: "DELETE" },
+  );
 }
 
 export function getDefinition(id: string): Promise<Definition> {
@@ -97,6 +107,12 @@ export function listRuns(): Promise<Page<Run>> {
 
 export function getRun(id: string): Promise<Run> {
   return request<Run>(`/runs/${id}`);
+}
+
+export function getRunLiveOutput(id: string, attemptNo?: number, maxBytes = 262144): Promise<LiveOutput> {
+  const params = new URLSearchParams({ max_bytes: String(maxBytes) });
+  if (attemptNo != null) params.set("attempt_no", String(attemptNo));
+  return request<LiveOutput>(`/runs/${id}/live-output?${params.toString()}`);
 }
 
 export function createRun(payload: unknown): Promise<Run> {
@@ -124,6 +140,14 @@ export function scheduleAction(id: string, action: "pause" | "resume" | "cancel"
     method: "POST",
     headers: { "If-Match": String(version) },
   });
+}
+
+export function deleteSchedule(id: string): Promise<void> {
+  return request<void>(`/schedules/${id}`, { method: "DELETE" });
+}
+
+export function deleteAllSchedules(): Promise<{ deleted: number }> {
+  return request<{ deleted: number }>("/schedules", { method: "DELETE" });
 }
 
 export function listTargets(): Promise<Page<Target>> {

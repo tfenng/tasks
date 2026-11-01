@@ -35,14 +35,14 @@ export default function ConsoleLayout({ user, onLogout }: { user: User; onLogout
   ];
 
   const taskItems: MenuProps["items"] = [
+    { key: "/definitions", icon: <AppstoreOutlined />, label: <Link to="/definitions">任务</Link> },
+    { key: "/schedules", icon: <ScheduleOutlined />, label: <Link to="/schedules">调度</Link> },
     ...(user.role === "admin"
       ? [
           { key: "/credentials", icon: <KeyOutlined />, label: <Link to="/credentials">凭据</Link> },
           { key: "/targets", icon: <CloudServerOutlined />, label: <Link to="/targets">执行目标</Link> },
         ]
       : []),
-    { key: "/definitions", icon: <AppstoreOutlined />, label: <Link to="/definitions">任务</Link> },
-    { key: "/schedules", icon: <ScheduleOutlined />, label: <Link to="/schedules">调度</Link> },
   ];
 
   const menuItems: MenuProps["items"] = [
